@@ -13,9 +13,10 @@ dotnet run --project src/OsSimulator.Cli -- workloads/fcfs-basico.json
 
 ## O que foi entregue
 
-- Processos e threads simulados.
-- Fila de eventos e relógio lógico.
-- Escalonamento FCFS.
-- Leitura de carga JSON.
-- Log e testes iniciais.
-- Diagrama de classes: [docs/diagrama-classes.puml](docs/diagrama-classes.puml).
+* Processos e threads simulados.
+* Fila de eventos e relógio lógico.
+* Escalonamento FCFS.
+* Leitura de carga JSON.
+* Log e testes iniciais.
+* Diagrama de classes: UML
+
