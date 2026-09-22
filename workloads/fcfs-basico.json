@@ -1,0 +1,16 @@
+{
+  "processos": [
+    {
+      "identificador": "P1",
+      "tempoChegada": 0,
+      "prioridade": 1,
+      "threads": [{ "identificador": "T1", "surtosCpu": [3] }]
+    },
+    {
+      "identificador": "P2",
+      "tempoChegada": 1,
+      "prioridade": 2,
+      "threads": [{ "identificador": "T2", "surtosCpu": [2] }]
+    }
+  ]
+}
