@@ -12,8 +12,7 @@ public sealed class MotorSimulacao
 
     public MotorSimulacao(IEscalonador escalonador, ConfiguracaoSimulacao configuracao)
     {
-        if (configuracao.CustoTrocaContexto < 0)
-            throw new ArgumentException("O custo da troca de contexto não pode ser negativo.");
+        configuracao.Validar();
         _escalonador = escalonador;
         _configuracao = configuracao;
     }
@@ -26,6 +25,8 @@ public sealed class MotorSimulacao
 
     public void Executar(CargaTrabalho carga)
     {
+        Registrar("CONFIGURACAO", "SIM", _configuracao.Descrever());
+
         var processosOrdenados = carga.Processos
             .OrderBy(p => p.TempoChegada)
             .ThenBy(p => p.Identificador, StringComparer.Ordinal);
@@ -62,10 +63,7 @@ public sealed class MotorSimulacao
             $"processo chegou (prioridade {processo.Prioridade}, {processo.Threads.Count} thread(s))");
 
         foreach (var thread in processo.Threads.OrderBy(t => t.Identificador, StringComparer.Ordinal))
-        {
-            MudarEstado(thread, EstadoThread.Pronto, "ADMISSAO", "thread entrou na fila de prontos");
-            _escalonador.Enfileirar(thread);
-        }
+            ColocarNaFilaDeProntos(thread, "ADMISSAO", "thread entrou na fila de prontos");
     }
 
     private void IniciarTrocaDeContextoSeCpuLivre()
@@ -73,6 +71,10 @@ public sealed class MotorSimulacao
         if (!Cpu.Livre) return;
         var proxima = _escalonador.SelecionarProxima();
         if (proxima is null) return;
+
+        // A thread saiu da fila de prontos: fecha o intervalo de espera que estava aberto.
+        proxima.TempoEspera += Relogio - proxima.InicioEsperaAtual!.Value;
+        proxima.InicioEsperaAtual = null;
 
         var custo = _configuracao.CustoTrocaContexto;
         Cpu.IniciarTrocaDeContexto(proxima, custo);
@@ -86,6 +88,7 @@ public sealed class MotorSimulacao
         Registrar("FIM_TROCA", thread.Identificador,
             $"contexto restaurado da pilha lógica (PC={Cpu.Registradores!.ContadorPrograma})");
         MudarEstado(thread, EstadoThread.Executando, "DESPACHO", "thread assumiu a CPU");
+        thread.TempoPrimeiroDespacho ??= Relogio;   // só grava na primeira vez
         ExecutarOperacaoAtual(thread);
     }
 
@@ -95,6 +98,8 @@ public sealed class MotorSimulacao
             throw new InvalidOperationException($"Fim de surto para {thread.Identificador}, que não está executando.");
 
         var registradores = Cpu.Registradores!;
+        Cpu.RegistrarTempoUtil(registradores.TempoRestante);
+        thread.TempoCpu += registradores.TempoRestante;
         registradores.TempoRestante = 0;
         registradores.ContadorPrograma++;
         thread.Processo.ContadorProgramaLogico++;
@@ -134,10 +139,22 @@ public sealed class MotorSimulacao
     private void FinalizarThread(BlocoControleThread thread)
     {
         Cpu.Liberar();
+        thread.TempoFinalizacao = Relogio;
         MudarEstado(thread, EstadoThread.Finalizado, "FINALIZACAO", "todas as operações foram concluídas");
     }
 
     // ---------------------------------------------------------------- utilitários
+
+    /// <summary>
+    /// Toda entrada na fila de prontos passa por aqui: muda o estado, abre o intervalo de espera
+    /// e entrega a thread ao escalonador. Será reaproveitado na preempção (etapa 3) e no fim de E/S (etapa 4).
+    /// </summary>
+    private void ColocarNaFilaDeProntos(BlocoControleThread thread, string tipoEvento, string motivo)
+    {
+        MudarEstado(thread, EstadoThread.Pronto, tipoEvento, motivo);
+        thread.InicioEsperaAtual = Relogio;
+        _escalonador.Enfileirar(thread);
+    }
 
     /// <summary>
     /// Único lugar onde o estado de uma thread muda. Registra a transição no log e,
@@ -153,6 +170,9 @@ public sealed class MotorSimulacao
         var estadoAnteriorProcesso = processo.Estado;
         if (processo.AtualizarEstado())
         {
+            if (processo.Estado == EstadoProcesso.Finalizado)
+                processo.TempoFinalizacao = Relogio;
+
             var tipo = processo.Estado == EstadoProcesso.Finalizado ? "FIM_PROCESSO" : "ESTADO_PROCESSO";
             Registrar(tipo, processo.Identificador,
                 $"{estadoAnteriorProcesso} -> {processo.Estado}: causado por {tipoEvento} de {thread.Identificador}");

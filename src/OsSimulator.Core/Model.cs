@@ -27,6 +27,9 @@ public sealed class BlocoControleProcesso
     /// <summary>Contador de programa lógico do processo: total de operações já concluídas por suas threads.</summary>
     public int ContadorProgramaLogico { get; internal set; }
 
+    /// <summary>Instante em que a última thread terminou (usado no tempo de retorno do processo).</summary>
+    public int? TempoFinalizacao { get; internal set; }
+
     public List<BlocoControleThread> Threads { get; } = [];
 
     /// <summary>
@@ -68,6 +71,25 @@ public sealed class BlocoControleThread
     /// quando volta, são desempilhados (Tanenbaum, seção 2.1.6).
     /// </summary>
     public Stack<ContextoCpu> PilhaLogica { get; } = new();
+
+    // ---- Contabilidade (Tanenbaum, fig. 2.4: "tempo de CPU usado", "momento em que iniciou")
+    // Esses valores alimentam as métricas ao final da simulação.
+
+    public int TempoChegada => Processo.TempoChegada;
+
+    /// <summary>Primeira vez que a thread começou a executar (para o tempo de resposta).</summary>
+    public int? TempoPrimeiroDespacho { get; internal set; }
+
+    public int? TempoFinalizacao { get; internal set; }
+
+    /// <summary>Soma dos intervalos em que a thread ficou na fila de prontos.</summary>
+    public int TempoEspera { get; internal set; }
+
+    /// <summary>Tempo de CPU útil (carga) consumido pela thread.</summary>
+    public int TempoCpu { get; internal set; }
+
+    /// <summary>Instante em que a thread entrou na fila de prontos pela última vez (nulo se não está na fila).</summary>
+    internal int? InicioEsperaAtual { get; set; }
 }
 
 public sealed record CargaTrabalho(IReadOnlyList<BlocoControleProcesso> Processos);

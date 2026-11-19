@@ -23,6 +23,11 @@ public sealed class Cpu
     public int QuantidadeTrocasContexto { get; private set; }
     public int TempoTotalTrocasContexto { get; private set; }
 
+    /// <summary>Tempo em que a CPU executou carga útil (surtos das threads).</summary>
+    public int TempoUtil { get; private set; }
+
+    internal void RegistrarTempoUtil(int duracao) => TempoUtil += duracao;
+
     /// <summary>A CPU fica reservada para a thread, mas ainda não executa nada dela.</summary>
     internal void IniciarTrocaDeContexto(BlocoControleThread thread, int custo)
     {

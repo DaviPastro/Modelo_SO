@@ -2,6 +2,7 @@ using OsSimulator.Core;
 
 var testes = new (string Nome, Action Executar)[]
 {
+    // Etapa 1 — núcleo
     ("Fila de eventos ordena por tempo e, no empate, por ordem de inserção", FilaEventosOrdenaPorTempoEInsercao),
     ("FCFS preserva a ordem de chegada", FcfsPreservaOrdemChegada),
     ("Thread passa por Novo, Pronto, Executando e Finalizado", ThreadSegueCicloDeVida),
@@ -10,6 +11,11 @@ var testes = new (string Nome, Action Executar)[]
     ("Operações de CPU consecutivas não liberam a CPU", OperacoesConsecutivasNaoLiberamCpu),
     ("Mesma carga e configuração geram o mesmo log", SimulacaoDeterministica),
     ("Leitor rejeita tipo de operação desconhecido", LeitorRejeitaOperacaoDesconhecida),
+    // Etapa 2 — métricas e configuração
+    ("Métricas de espera, resposta e retorno por thread", MetricasPorThread),
+    ("Utilização da CPU separa carga útil, troca e ociosidade", UtilizacaoDaCpu),
+    ("Log começa com a configuração usada", LogComecaComConfiguracao),
+    ("Configuração inválida é rejeitada", ConfiguracaoInvalidaRejeitada),
 };
 
 var falhas = 0;
@@ -21,7 +27,7 @@ foreach (var teste in testes)
 Console.WriteLine($"{testes.Length - falhas}/{testes.Length} testes passaram.");
 return falhas == 0 ? 0 : 1;
 
-// ------------------------------------------------------------------ testes
+// ------------------------------------------------------------------ testes da etapa 1
 
 static void FilaEventosOrdenaPorTempoEInsercao()
 {
@@ -125,10 +131,65 @@ static void LeitorRejeitaOperacaoDesconhecida()
     }
 }
 
+// ------------------------------------------------------------------ testes da etapa 2
+
+static void MetricasPorThread()
+{
+    var carga = new CargaTrabalho([CriarProcesso("P1", 0, ("T1", 3)), CriarProcesso("P2", 1, ("T2", 2))]);
+    var motor = CriarMotor(custoTroca: 1);
+    motor.Executar(carga);
+    var metricas = MetricasSimulacao.Calcular(carga, motor);
+
+    // T1: chega 0, sai da fila em 0 (espera 0), executa a partir de 1 (resposta 1), termina em 4 (retorno 4)
+    var t1 = metricas.Threads.Single(t => t.Thread == "T1");
+    Assert(t1.Espera == 0 && t1.Resposta == 1 && t1.Retorno == 4, $"T1 incorreta: {t1}");
+
+    // T2: chega 1, sai da fila em 4 (espera 3), executa a partir de 5 (resposta 4), termina em 7 (retorno 6)
+    var t2 = metricas.Threads.Single(t => t.Thread == "T2");
+    Assert(t2.Espera == 3 && t2.Resposta == 4 && t2.Retorno == 6, $"T2 incorreta: {t2}");
+
+    Assert(metricas.EsperaMedia == 1.5, $"Espera média deveria ser 1.5, mas foi {metricas.EsperaMedia}.");
+    Assert(metricas.Processos.Single(p => p.Processo == "P2").Retorno == 6, "Retorno de P2 deveria ser 6.");
+}
+
+static void UtilizacaoDaCpu()
+{
+    // Único processo chega em 5: CPU fica ociosa de 0 a 5, troca de 5 a 6, executa de 6 a 8.
+    var carga = new CargaTrabalho([CriarProcesso("P1", 5, ("T1", 2))]);
+    var motor = CriarMotor(custoTroca: 1);
+    motor.Executar(carga);
+    var metricas = MetricasSimulacao.Calcular(carga, motor);
+
+    Assert(metricas.TempoTotal == 8, $"Tempo total deveria ser 8, mas foi {metricas.TempoTotal}.");
+    Assert(metricas.TempoUtilCpu == 2, $"Carga útil deveria ser 2, mas foi {metricas.TempoUtilCpu}.");
+    Assert(metricas.TempoTrocas == 1, $"Sobrecarga deveria ser 1, mas foi {metricas.TempoTrocas}.");
+    Assert(metricas.TempoOcioso == 5, $"Tempo ocioso deveria ser 5, mas foi {metricas.TempoOcioso}.");
+    Assert(metricas.UtilizacaoCpu == 0.25, $"Utilização deveria ser 0.25, mas foi {metricas.UtilizacaoCpu}.");
+    Assert(metricas.Throughput == 1.0 / 8, $"Throughput deveria ser 1/8, mas foi {metricas.Throughput}.");
+}
+
+static void LogComecaComConfiguracao()
+{
+    var motor = CriarMotor(custoTroca: 2);
+    motor.Executar(new CargaTrabalho([CriarProcesso("P1", 0, ("T1", 1))]));
+
+    var primeira = motor.Registro[0];
+    Assert(primeira.Tipo == "CONFIGURACAO", "A primeira linha do log deveria ser a configuração.");
+    Assert(primeira.Descricao.Contains("troca=2"), $"A configuração registrada está incompleta: {primeira.Descricao}");
+}
+
+static void ConfiguracaoInvalidaRejeitada()
+{
+    ExigirErro(() => new ConfiguracaoSimulacao { Quantum = 0 }.Validar(), "quantum zero");
+    ExigirErro(() => new ConfiguracaoSimulacao { CustoTrocaContexto = -1 }.Validar(), "troca negativa");
+    ExigirErro(() => new ConfiguracaoSimulacao { Algoritmo = "sjf" }.Validar(), "algoritmo desconhecido");
+    ExigirErro(() => new ConfiguracaoSimulacao { NumeroMolduras = 0 }.Validar(), "zero molduras");
+}
+
 // ------------------------------------------------------------------ auxiliares
 
 static MotorSimulacao CriarMotor(int custoTroca) =>
-    new(new EscalonadorFcfs(), new ConfiguracaoSimulacao(CustoTrocaContexto: custoTroca));
+    new(new EscalonadorFcfs(), new ConfiguracaoSimulacao { CustoTrocaContexto = custoTroca });
 
 static BlocoControleProcesso CriarProcesso(string identificador, int tempoChegada, params (string Identificador, int DuracaoCpu)[] threads)
 {
@@ -136,6 +197,13 @@ static BlocoControleProcesso CriarProcesso(string identificador, int tempoChegad
     foreach (var thread in threads)
         processo.Threads.Add(new BlocoControleThread(thread.Identificador, processo, [new OperacaoCpu(thread.DuracaoCpu)]));
     return processo;
+}
+
+static void ExigirErro(Action acao, string caso)
+{
+    try { acao(); }
+    catch (ArgumentException) { return; }
+    throw new InvalidOperationException($"Deveria ter rejeitado: {caso}.");
 }
 
 static void Assert(bool condicao, string mensagem)

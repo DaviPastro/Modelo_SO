@@ -7,7 +7,11 @@ Projeto da primeira entrega da disciplina. Simula processos e threads usando um 
 No diretório do projeto:
 
 dotnet run --project tests/OsSimulator.Tests
-dotnet run --project src/OsSimulator.Cli -- workloads/fcfs-basico.json
+dotnet run --project src/OsSimulator.Cli -- --carga workloads/fcfs-basico.json
+
+Para ver todas as opções (algoritmo, quantum, custo de troca, memória, dispositivos, semente):
+
+dotnet run --project src/OsSimulator.Cli -- --ajuda
 
 É necessário ter o .NET SDK 10 instalado.
 

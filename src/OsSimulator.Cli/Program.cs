@@ -1,30 +1,32 @@
+using OsSimulator.Cli;
 using OsSimulator.Core;
 
-if (args.Length != 1)
+if (args.Length == 0 || args.Contains("--ajuda"))
 {
-    Console.Error.WriteLine("Uso: dotnet run --project src/OsSimulator.Cli -- <arquivo-de-carga.json>");
-    return 1;
+    Console.WriteLine(LeitorArgumentos.Uso);
+    return args.Length == 0 ? 1 : 0;
 }
 
 try
 {
-    // Na etapa 2 todos estes valores passarão a vir da linha de comando.
-    var configuracao = new ConfiguracaoSimulacao(CustoTrocaContexto: 1);
-    var carga = LeitorCargaTrabalho.Ler(args[0]);
-    var motor = new MotorSimulacao(new EscalonadorFcfs(), configuracao);
+    // 1. Ler e validar parâmetros e carga ANTES de simular (erro aqui não gera resultado parcial).
+    var configuracao = LeitorArgumentos.Ler(args);
+    var carga = LeitorCargaTrabalho.Ler(configuracao.ArquivoCarga);
+
+    // 2. Montar o simulador com a política escolhida e executar.
+    var motor = new MotorSimulacao(FabricaEscalonador.Criar(configuracao), configuracao);
     motor.Executar(carga);
 
-    Console.WriteLine($"Configuração: carga={args[0]}, política=FCFS, custoTrocaContexto={configuracao.CustoTrocaContexto}");
-    Console.WriteLine();
+    // 3. Exibir log e métricas.
     foreach (var entrada in motor.Registro) Console.WriteLine(entrada);
     Console.WriteLine();
-    Console.WriteLine($"Relógio final: {motor.Relogio}");
-    Console.WriteLine($"Trocas de contexto: {motor.Cpu.QuantidadeTrocasContexto} (sobrecarga total: {motor.Cpu.TempoTotalTrocasContexto})");
+    foreach (var linha in MetricasSimulacao.Calcular(carga, motor).Formatar()) Console.WriteLine(linha);
     return 0;
 }
 catch (ArgumentException exception)
 {
     Console.Error.WriteLine($"Erro de configuração: {exception.Message}");
+    Console.Error.WriteLine("Use --ajuda para ver as opções.");
     return 2;
 }
 catch (Exception exception)
