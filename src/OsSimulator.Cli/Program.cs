@@ -8,13 +8,18 @@ if (args.Length != 1)
 
 try
 {
+    // Na etapa 2 todos estes valores passarão a vir da linha de comando.
+    var configuracao = new ConfiguracaoSimulacao(CustoTrocaContexto: 1);
     var carga = LeitorCargaTrabalho.Ler(args[0]);
-    var motor = new MotorSimulacao(new EscalonadorFcfs());
+    var motor = new MotorSimulacao(new EscalonadorFcfs(), configuracao);
     motor.Executar(carga);
-    Console.WriteLine("Simulador");
-    Console.WriteLine("Política: FCFS | Clock lógico");
-    foreach (var linha in motor.Registro) Console.WriteLine(linha);
+
+    Console.WriteLine($"Configuração: carga={args[0]}, política=FCFS, custoTrocaContexto={configuracao.CustoTrocaContexto}");
+    Console.WriteLine();
+    foreach (var entrada in motor.Registro) Console.WriteLine(entrada);
+    Console.WriteLine();
     Console.WriteLine($"Relógio final: {motor.Relogio}");
+    Console.WriteLine($"Trocas de contexto: {motor.Cpu.QuantidadeTrocasContexto} (sobrecarga total: {motor.Cpu.TempoTotalTrocasContexto})");
     return 0;
 }
 catch (ArgumentException exception)
