@@ -1,6 +1,6 @@
 namespace OsSimulator.Core;
 
-public enum TipoEvento { ChegadaProcesso, FimTrocaContexto, FimSurtoCpu }
+public enum TipoEvento { ChegadaProcesso, FimTrocaContexto, FimSurtoCpu, FimQuantum }
 
 /// <summary>Algo que vai acontecer em um instante do clock lógico.</summary>
 public sealed record EventoSimulacao(

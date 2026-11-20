@@ -50,6 +50,7 @@ public sealed class MotorSimulacao
             case TipoEvento.ChegadaProcesso: TratarChegada(evento.Processo); break;
             case TipoEvento.FimTrocaContexto: TratarFimTrocaContexto(evento.Thread!); break;
             case TipoEvento.FimSurtoCpu: TratarFimSurtoCpu(evento.Thread!); break;
+            case TipoEvento.FimQuantum: TratarFimQuantum(evento.Thread!); break;
             default: throw new InvalidOperationException($"Evento desconhecido: {evento.Tipo}");
         }
     }
@@ -86,7 +87,7 @@ public sealed class MotorSimulacao
     {
         Cpu.ConcluirTrocaDeContexto();
         Registrar("FIM_TROCA", thread.Identificador,
-            $"contexto restaurado da pilha lógica (PC={Cpu.Registradores!.ContadorPrograma})");
+            $"contexto restaurado da pilha lógica (PC={Cpu.Registradores!.ContadorPrograma}, restante={Cpu.Registradores.TempoRestante})");
         MudarEstado(thread, EstadoThread.Executando, "DESPACHO", "thread assumiu a CPU");
         thread.TempoPrimeiroDespacho ??= Relogio;   // só grava na primeira vez
         ExecutarOperacaoAtual(thread);
@@ -107,6 +108,34 @@ public sealed class MotorSimulacao
         ExecutarOperacaoAtual(thread);
     }
 
+    /// <summary>O quantum acabou mas o surto não: a thread usou uma fatia inteira e ainda resta trabalho.</summary>
+    private void TratarFimQuantum(BlocoControleThread thread)
+    {
+        if (Cpu.ThreadAtual != thread || Cpu.EmTrocaDeContexto)
+            throw new InvalidOperationException($"Fim de quantum para {thread.Identificador}, que não está executando.");
+
+        var quantum = _escalonador.Quantum!.Value;
+        var registradores = Cpu.Registradores!;
+        Cpu.RegistrarTempoUtil(quantum);
+        thread.TempoCpu += quantum;
+        registradores.TempoRestante -= quantum;
+
+        if (!_escalonador.PossuiThreadsProntas)
+        {
+            // Ninguém esperando: não faz sentido pagar uma troca de contexto. A thread ganha outro quantum.
+            Registrar("NOVO_QUANTUM", thread.Identificador,
+                $"quantum esgotado, mas a fila de prontos está vazia (restante={registradores.TempoRestante})");
+            ExecutarOperacaoAtual(thread);
+            return;
+        }
+
+        // Preempção: salva o contexto na pilha lógica e devolve a thread ao FIM da fila.
+        Registrar("FIM_QUANTUM", thread.Identificador,
+            $"quantum de {quantum} esgotado; contexto salvo na pilha lógica (PC={registradores.ContadorPrograma}, restante={registradores.TempoRestante})");
+        Cpu.SalvarContextoELiberar();
+        ColocarNaFilaDeProntos(thread, "PREEMPCAO", "quantum esgotado, thread volta ao fim da fila");
+    }
+
     // ---------------------------------------------------------------- execução das operações
 
     /// <summary>Olha a operação apontada pelo PC e decide o que fazer com ela.</summary>
@@ -125,14 +154,32 @@ public sealed class MotorSimulacao
             case OperacaoCpu operacaoCpu:
                 if (registradores.TempoRestante == 0)
                     registradores.TempoRestante = operacaoCpu.Duracao;
-                Registrar("EXECUCAO_CPU", thread.Identificador,
-                    $"executando surto de CPU por {registradores.TempoRestante} unidade(s)");
-                _eventos.Enfileirar(new EventoSimulacao(
-                    Relogio + registradores.TempoRestante, TipoEvento.FimSurtoCpu, thread.Processo, thread));
+                AgendarFatiaDeCpu(thread, registradores);
                 break;
 
             default:
                 throw new InvalidOperationException($"Operação não suportada: {operacao}");
+        }
+    }
+
+    /// <summary>
+    /// Decide até quando a thread roda agora. Sem quantum (FCFS, prioridade) ou se o que resta cabe no quantum:
+    /// agenda o fim do surto. Caso contrário: agenda o fim do quantum (preempção).
+    /// </summary>
+    private void AgendarFatiaDeCpu(BlocoControleThread thread, ContextoCpu registradores)
+    {
+        var quantum = _escalonador.Quantum;
+        var restante = registradores.TempoRestante;
+
+        if (quantum is null || restante <= quantum)
+        {
+            Registrar("EXECUCAO_CPU", thread.Identificador, $"executando surto de CPU por {restante} unidade(s)");
+            _eventos.Enfileirar(new EventoSimulacao(Relogio + restante, TipoEvento.FimSurtoCpu, thread.Processo, thread));
+        }
+        else
+        {
+            Registrar("EXECUCAO_CPU", thread.Identificador, $"executando fatia de {quantum} de um surto que ainda precisa de {restante}");
+            _eventos.Enfileirar(new EventoSimulacao(Relogio + quantum.Value, TipoEvento.FimQuantum, thread.Processo, thread));
         }
     }
 

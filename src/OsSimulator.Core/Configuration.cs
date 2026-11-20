@@ -38,10 +38,7 @@ public sealed record ConfiguracaoSimulacao
     }
 
     /// <summary>Texto de uma linha com toda a configuração, registrado no início do log.</summary>
-    public string Descrever() => Invariant(
-        $"carga={ArquivoCarga} algoritmo={Algoritmo} quantum={Quantum} troca={CustoTrocaContexto} " +
-        $"pagina={TamanhoPagina} molduras={NumeroMolduras} falta-pagina={TempoFaltaPagina} " +
-        $"disco={TempoDisco} terminal={TempoTerminal} semente={Semente}");
+    public string Descrever() => Invariant($"carga={ArquivoCarga} algoritmo={Algoritmo} quantum={Quantum} troca={CustoTrocaContexto} pagina={TamanhoPagina} molduras={NumeroMolduras} falta-pagina={TempoFaltaPagina} disco={TempoDisco} terminal={TempoTerminal} semente={Semente}");
 
     private static void ExigirPositivo(int valor, string opcao)
     {

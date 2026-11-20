@@ -16,6 +16,13 @@ var testes = new (string Nome, Action Executar)[]
     ("Utilização da CPU separa carga útil, troca e ociosidade", UtilizacaoDaCpu),
     ("Log começa com a configuração usada", LogComecaComConfiguracao),
     ("Configuração inválida é rejeitada", ConfiguracaoInvalidaRejeitada),
+    // Etapa 3 — Round Robin e prioridades
+    ("Round Robin alterna as threads ao fim do quantum", RoundRobinAlternaThreads),
+    ("Preempção salva o contexto e a thread retoma de onde parou", PreempcaoSalvaContexto),
+    ("Round Robin sem concorrência não faz troca de contexto", RoundRobinSemConcorrencia),
+    ("Prioridade escolhe o menor número primeiro", PrioridadeOrdenaFila),
+    ("Prioridade empatada respeita a ordem de entrada na fila", PrioridadeEmpateFifo),
+    ("Fábrica cria o escalonador pedido na configuração", FabricaCriaEscalonador),
 };
 
 var falhas = 0;
@@ -186,10 +193,91 @@ static void ConfiguracaoInvalidaRejeitada()
     ExigirErro(() => new ConfiguracaoSimulacao { NumeroMolduras = 0 }.Validar(), "zero molduras");
 }
 
+// ------------------------------------------------------------------ testes da etapa 3
+
+static void RoundRobinAlternaThreads()
+{
+    // quantum 2, sem custo de troca. T1 precisa de 5, T2 de 3, ambas chegam em 0.
+    // Linha do tempo: T1 0-2 | T2 2-4 | T1 4-6 | T2 6-7 (fim) | T1 7-8 (fim)
+    var motor = CriarMotorCom(new EscalonadorRoundRobin(2), custoTroca: 0);
+    motor.Executar(new CargaTrabalho([CriarProcesso("P1", 0, ("T1", 5)), CriarProcesso("P2", 0, ("T2", 3))]));
+
+    var despachos = motor.Registro.Where(e => e.Tipo == "DESPACHO").Select(e => e.Sujeito).ToList();
+    Assert(despachos.SequenceEqual(new[] { "T1", "T2", "T1", "T2", "T1" }), $"Ordem incorreta: {string.Join(", ", despachos)}");
+    Assert(motor.Registro.Count(e => e.Tipo == "PREEMPCAO") == 3, "Deveriam ocorrer 3 preempções.");
+    Assert(motor.Relogio == 8, $"Relógio final deveria ser 8, mas foi {motor.Relogio}.");
+}
+
+static void PreempcaoSalvaContexto()
+{
+    // T1 (5) é preemptada em 2 com 3 unidades restantes; ao voltar, o contexto restaurado deve mostrar isso.
+    var motor = CriarMotorCom(new EscalonadorRoundRobin(2), custoTroca: 0);
+    motor.Executar(new CargaTrabalho([CriarProcesso("P1", 0, ("T1", 5)), CriarProcesso("P2", 0, ("T2", 1))]));
+
+    var restauracoesT1 = motor.Registro.Where(e => e.Tipo == "FIM_TROCA" && e.Sujeito == "T1").ToList();
+    Assert(restauracoesT1.Count == 2, $"T1 deveria ser restaurada 2 vezes, mas foi {restauracoesT1.Count}.");
+    Assert(restauracoesT1[1].Descricao.Contains("restante=3"), $"Contexto restaurado incorreto: {restauracoesT1[1].Descricao}");
+}
+
+static void RoundRobinSemConcorrencia()
+{
+    // Thread sozinha com surto de 5 e quantum 2: ganha novos quanta sem sair da CPU.
+    var motor = CriarMotorCom(new EscalonadorRoundRobin(2), custoTroca: 1);
+    motor.Executar(new CargaTrabalho([CriarProcesso("P1", 0, ("T1", 5))]));
+
+    Assert(motor.Cpu.QuantidadeTrocasContexto == 1, "Deveria haver só a troca de contexto inicial.");
+    Assert(motor.Registro.Count(e => e.Tipo == "NOVO_QUANTUM") == 2, "Deveriam ser concedidos 2 novos quanta.");
+    Assert(motor.Relogio == 6, $"Relógio final deveria ser 6 (1 de troca + 5), mas foi {motor.Relogio}.");
+}
+
+static void PrioridadeOrdenaFila()
+{
+    // T1 ocupa a CPU de 0 a 3. Enquanto isso chegam T2 (prioridade 3) e T3 (prioridade 2): T3 deve ir antes.
+    var motor = CriarMotorCom(new EscalonadorPrioridade(), custoTroca: 0);
+    motor.Executar(new CargaTrabalho([
+        CriarProcessoComPrioridade("P1", 0, 1, "T1", 3),
+        CriarProcessoComPrioridade("P2", 1, 3, "T2", 1),
+        CriarProcessoComPrioridade("P3", 2, 2, "T3", 1)]));
+
+    var despachos = motor.Registro.Where(e => e.Tipo == "DESPACHO").Select(e => e.Sujeito).ToList();
+    Assert(despachos.SequenceEqual(new[] { "T1", "T3", "T2" }), $"Ordem incorreta: {string.Join(", ", despachos)}");
+}
+
+static void PrioridadeEmpateFifo()
+{
+    // TA e TB têm a mesma prioridade; TA entrou na fila antes, então sai antes.
+    var motor = CriarMotorCom(new EscalonadorPrioridade(), custoTroca: 0);
+    motor.Executar(new CargaTrabalho([
+        CriarProcessoComPrioridade("P0", 0, 1, "T0", 3),
+        CriarProcessoComPrioridade("PB", 2, 2, "TB", 1),
+        CriarProcessoComPrioridade("PA", 1, 2, "TA", 1)]));
+
+    var despachos = motor.Registro.Where(e => e.Tipo == "DESPACHO").Select(e => e.Sujeito).ToList();
+    Assert(despachos.SequenceEqual(new[] { "T0", "TA", "TB" }), $"Ordem incorreta: {string.Join(", ", despachos)}");
+}
+
+static void FabricaCriaEscalonador()
+{
+    Assert(FabricaEscalonador.Criar(new ConfiguracaoSimulacao { Algoritmo = "fcfs" }) is EscalonadorFcfs, "fcfs deveria criar EscalonadorFcfs.");
+    Assert(FabricaEscalonador.Criar(new ConfiguracaoSimulacao { Algoritmo = "prioridade" }) is EscalonadorPrioridade, "prioridade deveria criar EscalonadorPrioridade.");
+
+    var rr = FabricaEscalonador.Criar(new ConfiguracaoSimulacao { Algoritmo = "rr", Quantum = 3 });
+    Assert(rr is EscalonadorRoundRobin && rr.Quantum == 3, "rr deveria criar EscalonadorRoundRobin com quantum 3.");
+}
+
 // ------------------------------------------------------------------ auxiliares
 
-static MotorSimulacao CriarMotor(int custoTroca) =>
-    new(new EscalonadorFcfs(), new ConfiguracaoSimulacao { CustoTrocaContexto = custoTroca });
+static MotorSimulacao CriarMotor(int custoTroca) => CriarMotorCom(new EscalonadorFcfs(), custoTroca);
+
+static MotorSimulacao CriarMotorCom(IEscalonador escalonador, int custoTroca) =>
+    new(escalonador, new ConfiguracaoSimulacao { CustoTrocaContexto = custoTroca });
+
+static BlocoControleProcesso CriarProcessoComPrioridade(string identificador, int tempoChegada, int prioridade, string idThread, int duracaoCpu)
+{
+    var processo = new BlocoControleProcesso(identificador, tempoChegada, prioridade);
+    processo.Threads.Add(new BlocoControleThread(idThread, processo, [new OperacaoCpu(duracaoCpu)]));
+    return processo;
+}
 
 static BlocoControleProcesso CriarProcesso(string identificador, int tempoChegada, params (string Identificador, int DuracaoCpu)[] threads)
 {
