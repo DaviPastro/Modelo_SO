@@ -1,13 +1,14 @@
 namespace OsSimulator.Core;
 
-public enum TipoEvento { ChegadaProcesso, FimTrocaContexto, FimSurtoCpu, FimQuantum }
+public enum TipoEvento { ChegadaProcesso, FimTrocaContexto, FimSurtoCpu, FimQuantum, InterrupcaoEs }
 
 /// <summary>Algo que vai acontecer em um instante do clock lógico.</summary>
 public sealed record EventoSimulacao(
     int Tempo,
     TipoEvento Tipo,
     BlocoControleProcesso Processo,
-    BlocoControleThread? Thread = null);
+    BlocoControleThread? Thread = null,
+    Dispositivo? Dispositivo = null);
 
 /// <summary>
 /// Fila de eventos ordenada pelo tempo. Em empate, sai primeiro quem foi inserido primeiro

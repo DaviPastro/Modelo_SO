@@ -10,7 +10,8 @@ public sealed record MetricasThread(
     int PrimeiroDespacho,
     int Finalizacao,
     int TempoCpu,
-    int Espera)
+    int Espera,
+    int Bloqueado)
 {
     /// <summary>Tempo de retorno: da chegada até a finalização.</summary>
     public int Retorno => Finalizacao - Chegada;
@@ -18,6 +19,9 @@ public sealed record MetricasThread(
     /// <summary>Tempo de resposta: da chegada até a primeira vez que executou na CPU.</summary>
     public int Resposta => PrimeiroDespacho - Chegada;
 }
+
+/// <summary>Uso de um dispositivo de E/S.</summary>
+public sealed record MetricasDispositivo(string Dispositivo, TipoDispositivo Tipo, int Atendidas, int TempoOcupado, double Utilizacao);
 
 /// <summary>Tempo de retorno de um processo: da chegada até a finalização da sua última thread.</summary>
 public sealed record MetricasProcesso(string Processo, int Chegada, int Finalizacao)
@@ -32,7 +36,8 @@ public sealed record MetricasSimulacao(
     int QuantidadeTrocas,
     int TempoTrocas,
     IReadOnlyList<MetricasThread> Threads,
-    IReadOnlyList<MetricasProcesso> Processos)
+    IReadOnlyList<MetricasProcesso> Processos,
+    IReadOnlyList<MetricasDispositivo> Dispositivos)
 {
     public int TempoOcioso => TempoTotal - TempoUtilCpu - TempoTrocas;
 
@@ -60,7 +65,8 @@ public sealed record MetricasSimulacao(
                 t.TempoPrimeiroDespacho!.Value,
                 t.TempoFinalizacao!.Value,
                 t.TempoCpu,
-                t.TempoEspera))
+                t.TempoEspera,
+                t.TempoBloqueado))
             .ToList();
 
         var processos = carga.Processos
@@ -69,26 +75,35 @@ public sealed record MetricasSimulacao(
             .Select(p => new MetricasProcesso(p.Identificador, p.TempoChegada, p.TempoFinalizacao!.Value))
             .ToList();
 
+        var dispositivos = motor.Dispositivos
+            .OrderBy(d => d.Nome, StringComparer.Ordinal)
+            .Select(d => new MetricasDispositivo(d.Nome, d.Tipo, d.RequisicoesAtendidas, d.TempoOcupado,
+                Proporcao(d.TempoOcupado, motor.Relogio)))
+            .ToList();
+
         return new MetricasSimulacao(
             motor.Relogio,
             motor.Cpu.TempoUtil,
             motor.Cpu.QuantidadeTrocasContexto,
             motor.Cpu.TempoTotalTrocasContexto,
             threads,
-            processos);
+            processos,
+            dispositivos);
     }
 
     /// <summary>Linhas de texto prontas para exibir no terminal (sempre com ponto decimal, para ser reproduzível).</summary>
     public IEnumerable<string> Formatar()
     {
         yield return "===== MÉTRICAS =====";
-        yield return "Thread Proc   Cheg  1oDesp  Fim  CPU  Espera  Resposta  Retorno";
+        yield return "Thread Proc   Cheg  1oDesp  Fim  CPU  Espera  Bloq  Resposta  Retorno";
         foreach (var t in Threads)
-            yield return Invariant($"{t.Thread,-6} {t.Processo,-6} {t.Chegada,4}  {t.PrimeiroDespacho,6}  {t.Finalizacao,3}  {t.TempoCpu,3}  {t.Espera,6}  {t.Resposta,8}  {t.Retorno,7}");
+            yield return Invariant($"{t.Thread,-6} {t.Processo,-6} {t.Chegada,4}  {t.PrimeiroDespacho,6}  {t.Finalizacao,3}  {t.TempoCpu,3}  {t.Espera,6}  {t.Bloqueado,4}  {t.Resposta,8}  {t.Retorno,7}");
 
         yield return Invariant($"Médias -> espera: {EsperaMedia:F2} | resposta: {RespostaMedia:F2} | retorno: {RetornoMedio:F2}");
         yield return "Retorno por processo -> " + string.Join(" | ", Processos.Select(p => Invariant($"{p.Processo}: {p.Retorno}")));
         yield return Invariant($"CPU (tempo total {TempoTotal}) -> carga útil: {TempoUtilCpu} ({UtilizacaoCpu:P1}) | troca de contexto: {TempoTrocas} ({ProporcaoSobrecarga:P1}) | ociosa: {TempoOcioso} ({ProporcaoOciosa:P1})");
+        foreach (var d in Dispositivos)
+            yield return Invariant($"Dispositivo {d.Dispositivo} ({d.Tipo}) -> {d.Atendidas} pedido(s), ocupado {d.TempoOcupado} ({d.Utilizacao:P1})");
         yield return Invariant($"Trocas de contexto: {QuantidadeTrocas} (sobrecarga total {TempoTrocas})");
         yield return Invariant($"Throughput: {Processos.Count} processo(s) em {TempoTotal} = {Throughput:F3} por unidade de tempo");
     }

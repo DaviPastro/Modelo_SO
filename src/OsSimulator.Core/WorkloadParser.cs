@@ -68,6 +68,13 @@ public static class LeitorCargaTrabalho
                     throw new ArgumentException($"Operação de CPU com duração inválida em {idThread}.");
                 return new OperacaoCpu(entrada.Duracao);
 
+            case "es":
+                var dispositivo = entrada.Dispositivo?.ToLowerInvariant();
+                if (dispositivo is null || !Dispositivo.NomesConhecidos.Contains(dispositivo))
+                    throw new ArgumentException(
+                        $"Dispositivo inválido '{entrada.Dispositivo}' em {idThread}. Use: {string.Join(", ", Dispositivo.NomesConhecidos)}.");
+                return new OperacaoEs(dispositivo, entrada.Bloqueante ?? true);
+
             default:
                 throw new ArgumentException($"Tipo de operação desconhecido '{entrada.Tipo}' em {idThread}.");
         }
@@ -97,5 +104,7 @@ public static class LeitorCargaTrabalho
     {
         public string? Tipo { get; set; }
         public int Duracao { get; set; }
+        public string? Dispositivo { get; set; }
+        public bool? Bloqueante { get; set; }   // se omitido, a E/S é bloqueante
     }
 }

@@ -23,6 +23,12 @@ var testes = new (string Nome, Action Executar)[]
     ("Prioridade escolhe o menor número primeiro", PrioridadeOrdenaFila),
     ("Prioridade empatada respeita a ordem de entrada na fila", PrioridadeEmpateFifo),
     ("Fábrica cria o escalonador pedido na configuração", FabricaCriaEscalonador),
+    // Etapa 4 — entrada e saída
+    ("E/S bloqueante bloqueia e desbloqueia a thread", EsBloqueanteBloqueiaEDesbloqueia),
+    ("CPU atende outra thread enquanto uma espera E/S", CpuAtendeOutraDuranteEs),
+    ("Fila do dispositivo atende em ordem de chegada", FilaDoDispositivoFcfs),
+    ("E/S não bloqueante guarda o resultado no TCB sem bloquear", EsNaoBloqueante),
+    ("Leitor rejeita dispositivo desconhecido", LeitorRejeitaDispositivoDesconhecido),
 };
 
 var falhas = 0;
@@ -265,12 +271,109 @@ static void FabricaCriaEscalonador()
     Assert(rr is EscalonadorRoundRobin && rr.Quantum == 3, "rr deveria criar EscalonadorRoundRobin com quantum 3.");
 }
 
+// ------------------------------------------------------------------ testes da etapa 4
+
+static void EsBloqueanteBloqueiaEDesbloqueia()
+{
+    // T1: CPU 0-2 | pede disco em 2, bloqueia | disco 2-7 | desbloqueia em 7 | CPU 7-8
+    var processo = ProcessoComOperacoes("P1", 0, "T1",
+        new OperacaoCpu(2), new OperacaoEs("disco", Bloqueante: true), new OperacaoCpu(1));
+    var carga = new CargaTrabalho([processo]);
+    var motor = CriarMotorCom(new EscalonadorFcfs(), custoTroca: 0, tempoDisco: 5);
+    motor.Executar(carga);
+
+    var transicoes = motor.Registro
+        .Where(e => e.Sujeito == "T1" && e.Descricao.Contains("->"))
+        .Select(e => e.Descricao.Split(':')[0])
+        .ToList();
+    var esperado = new[]
+    {
+        "Novo -> Pronto", "Pronto -> Executando", "Executando -> Bloqueado",
+        "Bloqueado -> Pronto", "Pronto -> Executando", "Executando -> Finalizado",
+    };
+    Assert(transicoes.SequenceEqual(esperado), $"Transições inesperadas: {string.Join(" | ", transicoes)}");
+    Assert(motor.Relogio == 8, $"Relógio final deveria ser 8, mas foi {motor.Relogio}.");
+    Assert(processo.Threads[0].TempoBloqueado == 5, $"Tempo bloqueado deveria ser 5, mas foi {processo.Threads[0].TempoBloqueado}.");
+
+    var disco = MetricasSimulacao.Calcular(carga, motor).Dispositivos.Single(d => d.Dispositivo == "disco");
+    Assert(disco.Atendidas == 1 && disco.TempoOcupado == 5, $"Métrica do disco incorreta: {disco}");
+}
+
+static void CpuAtendeOutraDuranteEs()
+{
+    // T1: CPU 0-1, bloqueia no disco (1-6) | T2 usa a CPU de 1 a 4 | CPU ociosa 4-6 | T1 volta: CPU 6-7
+    var carga = new CargaTrabalho([
+        ProcessoComOperacoes("P1", 0, "T1", new OperacaoCpu(1), new OperacaoEs("disco", true), new OperacaoCpu(1)),
+        ProcessoComOperacoes("P2", 0, "T2", new OperacaoCpu(3))]);
+    var motor = CriarMotorCom(new EscalonadorFcfs(), custoTroca: 0, tempoDisco: 5);
+    motor.Executar(carga);
+
+    var despachoT2 = motor.Registro.First(e => e.Tipo == "DESPACHO" && e.Sujeito == "T2");
+    Assert(despachoT2.Tempo == 1, $"T2 deveria assumir a CPU em 1, mas foi em {despachoT2.Tempo}.");
+    Assert(motor.Relogio == 7, $"Relógio final deveria ser 7, mas foi {motor.Relogio}.");
+
+    var metricas = MetricasSimulacao.Calcular(carga, motor);
+    Assert(metricas.TempoOcioso == 2, $"CPU deveria ficar ociosa por 2, mas foi {metricas.TempoOcioso}.");
+}
+
+static void FilaDoDispositivoFcfs()
+{
+    // T1 e T2 pedem o disco no instante 0. T1 é atendida de 0 a 4; T2 espera na fila e é atendida de 4 a 8.
+    var motor = CriarMotorCom(new EscalonadorFcfs(), custoTroca: 0, tempoDisco: 4);
+    motor.Executar(new CargaTrabalho([
+        ProcessoComOperacoes("P1", 0, "T1", new OperacaoEs("disco", true)),
+        ProcessoComOperacoes("P2", 0, "T2", new OperacaoEs("disco", true))]));
+
+    var interrupcoes = motor.Registro.Where(e => e.Tipo == "INTERRUPCAO").ToList();
+    Assert(interrupcoes.Select(e => e.Tempo).SequenceEqual(new[] { 4, 8 }), "As interrupções deveriam ocorrer em 4 e 8.");
+    Assert(interrupcoes[0].Descricao.Contains("T1") && interrupcoes[1].Descricao.Contains("T2"), "O disco deveria atender T1 antes de T2.");
+}
+
+static void EsNaoBloqueante()
+{
+    // T1 pede o terminal sem bloquear em 0 e continua: CPU 0-2, termina em 2. O terminal conclui em 3.
+    var processo = ProcessoComOperacoes("P1", 0, "T1", new OperacaoEs("terminal", Bloqueante: false), new OperacaoCpu(2));
+    var motor = CriarMotorCom(new EscalonadorFcfs(), custoTroca: 0, tempoTerminal: 3);
+    motor.Executar(new CargaTrabalho([processo]));
+
+    var thread = processo.Threads[0];
+    Assert(!motor.Registro.Any(e => e.Tipo == "BLOQUEIO"), "A thread não deveria bloquear.");
+    Assert(motor.Registro.Single(e => e.Tipo == "FINALIZACAO").Tempo == 2, "A thread deveria terminar em 2, sem esperar o terminal.");
+    Assert(thread.ResultadosEs.Count == 1 && thread.ResultadosEs[0].TempoConclusao == 3, "O resultado deveria estar no TCB, concluído em 3.");
+}
+
+static void LeitorRejeitaDispositivoDesconhecido()
+{
+    var caminho = Path.GetTempFileName();
+    File.WriteAllText(caminho, """{ "processos": [ { "identificador": "P1", "tempoChegada": 0, "prioridade": 1, "threads": [ { "identificador": "T1", "operacoes": [ { "tipo": "es", "dispositivo": "impressora" } ] } ] } ] }""");
+    try
+    {
+        LeitorCargaTrabalho.Ler(caminho);
+        throw new InvalidOperationException("O leitor deveria ter rejeitado o dispositivo 'impressora'.");
+    }
+    catch (ArgumentException)
+    {
+        // esperado
+    }
+    finally
+    {
+        File.Delete(caminho);
+    }
+}
+
 // ------------------------------------------------------------------ auxiliares
 
 static MotorSimulacao CriarMotor(int custoTroca) => CriarMotorCom(new EscalonadorFcfs(), custoTroca);
 
-static MotorSimulacao CriarMotorCom(IEscalonador escalonador, int custoTroca) =>
-    new(escalonador, new ConfiguracaoSimulacao { CustoTrocaContexto = custoTroca });
+static MotorSimulacao CriarMotorCom(IEscalonador escalonador, int custoTroca, int tempoDisco = 6, int tempoTerminal = 3) =>
+    new(escalonador, new ConfiguracaoSimulacao { CustoTrocaContexto = custoTroca, TempoDisco = tempoDisco, TempoTerminal = tempoTerminal });
+
+static BlocoControleProcesso ProcessoComOperacoes(string identificador, int tempoChegada, string idThread, params Operacao[] operacoes)
+{
+    var processo = new BlocoControleProcesso(identificador, tempoChegada, prioridade: 1);
+    processo.Threads.Add(new BlocoControleThread(idThread, processo, operacoes));
+    return processo;
+}
 
 static BlocoControleProcesso CriarProcessoComPrioridade(string identificador, int tempoChegada, int prioridade, string idThread, int duracaoCpu)
 {

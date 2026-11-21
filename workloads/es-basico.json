@@ -1,0 +1,34 @@
+{
+  "processos": [
+    {
+      "identificador": "P1",
+      "tempoChegada": 0,
+      "prioridade": 1,
+      "threads": [
+        {
+          "identificador": "T1",
+          "operacoes": [
+            { "tipo": "cpu", "duracao": 2 },
+            { "tipo": "es", "dispositivo": "disco", "bloqueante": true },
+            { "tipo": "cpu", "duracao": 2 }
+          ]
+        }
+      ]
+    },
+    {
+      "identificador": "P2",
+      "tempoChegada": 1,
+      "prioridade": 2,
+      "threads": [
+        {
+          "identificador": "T2",
+          "operacoes": [
+            { "tipo": "cpu", "duracao": 3 },
+            { "tipo": "es", "dispositivo": "terminal", "bloqueante": false },
+            { "tipo": "cpu", "duracao": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}

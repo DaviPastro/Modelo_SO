@@ -9,17 +9,26 @@ public sealed class MotorSimulacao
     private readonly ConfiguracaoSimulacao _configuracao;
     private readonly FilaEventos _eventos = new();
     private readonly List<EntradaLog> _registro = [];
+    private readonly Dictionary<string, Dispositivo> _dispositivos;
 
     public MotorSimulacao(IEscalonador escalonador, ConfiguracaoSimulacao configuracao)
     {
         configuracao.Validar();
         _escalonador = escalonador;
         _configuracao = configuracao;
+
+        // Um dispositivo de bloco e um de caractere, com tempos de serviço vindos da configuração.
+        _dispositivos = new Dictionary<string, Dispositivo>(StringComparer.Ordinal)
+        {
+            ["disco"] = new Dispositivo("disco", TipoDispositivo.Bloco, configuracao.TempoDisco),
+            ["terminal"] = new Dispositivo("terminal", TipoDispositivo.Caractere, configuracao.TempoTerminal),
+        };
     }
 
     public int Relogio { get; private set; }
     public Cpu Cpu { get; } = new();
     public IReadOnlyList<EntradaLog> Registro => _registro;
+    public IReadOnlyCollection<Dispositivo> Dispositivos => _dispositivos.Values;
 
     // ---------------------------------------------------------------- laço principal
 
@@ -51,6 +60,7 @@ public sealed class MotorSimulacao
             case TipoEvento.FimTrocaContexto: TratarFimTrocaContexto(evento.Thread!); break;
             case TipoEvento.FimSurtoCpu: TratarFimSurtoCpu(evento.Thread!); break;
             case TipoEvento.FimQuantum: TratarFimQuantum(evento.Thread!); break;
+            case TipoEvento.InterrupcaoEs: TratarInterrupcaoEs(evento.Dispositivo!); break;
             default: throw new InvalidOperationException($"Evento desconhecido: {evento.Tipo}");
         }
     }
@@ -136,6 +146,33 @@ public sealed class MotorSimulacao
         ColocarNaFilaDeProntos(thread, "PREEMPCAO", "quantum esgotado, thread volta ao fim da fila");
     }
 
+    /// <summary>
+    /// Interrupção simulada: o dispositivo terminou o pedido que estava atendendo (Tanenbaum, seção 5.1.5).
+    /// O "tratador de interrupção" acorda quem esperava (ou guarda o resultado) e inicia o próximo pedido da fila.
+    /// </summary>
+    private void TratarInterrupcaoEs(Dispositivo dispositivo)
+    {
+        var requisicao = dispositivo.Concluir();
+        var thread = requisicao.Thread;
+        Registrar("INTERRUPCAO", dispositivo.Nome, $"operação de {thread.Identificador} concluída");
+
+        if (requisicao.Bloqueante)
+        {
+            thread.TempoBloqueado += Relogio - thread.InicioBloqueioAtual!.Value;
+            thread.InicioBloqueioAtual = null;
+            ColocarNaFilaDeProntos(thread, "DESBLOQUEIO", $"{dispositivo.Nome} concluiu a operação");
+        }
+        else
+        {
+            thread.ResultadosEs.Add(new ResultadoEs(dispositivo.Nome, requisicao.TempoSolicitacao, Relogio));
+            Registrar("RESULTADO_ES", thread.Identificador,
+                $"resultado de {dispositivo.Nome} guardado no TCB (a thread não precisou esperar)");
+        }
+
+        if (dispositivo.IniciarProximo())
+            IniciarServicoEs(dispositivo);
+    }
+
     // ---------------------------------------------------------------- execução das operações
 
     /// <summary>Olha a operação apontada pelo PC e decide o que fazer com ela.</summary>
@@ -155,6 +192,10 @@ public sealed class MotorSimulacao
                 if (registradores.TempoRestante == 0)
                     registradores.TempoRestante = operacaoCpu.Duracao;
                 AgendarFatiaDeCpu(thread, registradores);
+                break;
+
+            case OperacaoEs operacaoEs:
+                SolicitarEs(thread, operacaoEs);
                 break;
 
             default:
@@ -181,6 +222,49 @@ public sealed class MotorSimulacao
             Registrar("EXECUCAO_CPU", thread.Identificador, $"executando fatia de {quantum} de um surto que ainda precisa de {restante}");
             _eventos.Enfileirar(new EventoSimulacao(Relogio + quantum.Value, TipoEvento.FimQuantum, thread.Processo, thread));
         }
+    }
+
+    /// <summary>
+    /// A thread pede E/S. O PC avança já agora (o pedido foi emitido), então, quando ela voltar à CPU,
+    /// continuará na operação seguinte.
+    /// </summary>
+    private void SolicitarEs(BlocoControleThread thread, OperacaoEs operacao)
+    {
+        var dispositivo = _dispositivos[operacao.Dispositivo];
+        var registradores = Cpu.Registradores!;
+        registradores.ContadorPrograma++;
+        thread.Processo.ContadorProgramaLogico++;
+
+        var modo = operacao.Bloqueante ? "bloqueante" : "não bloqueante";
+        Registrar("PEDIDO_ES", thread.Identificador,
+            $"pedido {modo} ao {dispositivo.Nome} ({dispositivo.Tipo}); pedidos já na fila: {dispositivo.TamanhoFila}");
+
+        if (dispositivo.Enfileirar(new RequisicaoEs(thread, operacao.Bloqueante, Relogio)))
+            IniciarServicoEs(dispositivo);
+
+        if (operacao.Bloqueante)
+        {
+            // Sai da CPU guardando o contexto e fica Bloqueada até a interrupção do dispositivo.
+            Cpu.SalvarContextoELiberar();
+            thread.InicioBloqueioAtual = Relogio;
+            MudarEstado(thread, EstadoThread.Bloqueado, "BLOQUEIO", $"aguardando o {dispositivo.Nome}");
+        }
+        else
+        {
+            // Não espera: segue para a próxima operação sem sair da CPU (sem espera ativa).
+            ExecutarOperacaoAtual(thread);
+        }
+    }
+
+    /// <summary>O dispositivo começa a atender o pedido da vez e agenda a interrupção de conclusão.</summary>
+    private void IniciarServicoEs(Dispositivo dispositivo)
+    {
+        var requisicao = dispositivo.EmAtendimento!;
+        Registrar("INICIO_ES", dispositivo.Nome,
+            $"atendendo {requisicao.Thread.Identificador} por {dispositivo.TempoServico} unidade(s)");
+        _eventos.Enfileirar(new EventoSimulacao(
+            Relogio + dispositivo.TempoServico, TipoEvento.InterrupcaoEs,
+            requisicao.Thread.Processo, requisicao.Thread, dispositivo));
     }
 
     private void FinalizarThread(BlocoControleThread thread)

@@ -90,6 +90,15 @@ public sealed class BlocoControleThread
 
     /// <summary>Instante em que a thread entrou na fila de prontos pela última vez (nulo se não está na fila).</summary>
     internal int? InicioEsperaAtual { get; set; }
+
+    /// <summary>Soma dos intervalos em que a thread ficou bloqueada esperando E/S.</summary>
+    public int TempoBloqueado { get; internal set; }
+
+    /// <summary>Instante em que a thread bloqueou pela última vez (nulo se não está bloqueada).</summary>
+    internal int? InicioBloqueioAtual { get; set; }
+
+    /// <summary>Resultados de E/S não bloqueante, entregues quando o dispositivo termina.</summary>
+    public List<ResultadoEs> ResultadosEs { get; } = [];
 }
 
 public sealed record CargaTrabalho(IReadOnlyList<BlocoControleProcesso> Processos);
